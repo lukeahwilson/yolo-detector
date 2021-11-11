@@ -65,11 +65,11 @@ def parse_cfg(cfgfile):
     return blocks
 
 def create_modules(blocks):
-    net_info = blocks[0]     #Captures the information about the input and pre-processing    
+    net_info = blocks[0]     #Captures the information about the input and pre-processing
     module_list = nn.ModuleList()
     prev_filters = 3
     output_filters = []
-    
+
     for index, x in enumerate(blocks[1:]):
         module = nn.Sequential()
 
@@ -105,7 +105,7 @@ def create_modules(blocks):
                 bn = nn.BatchNorm2d(filters)
                 module.add_module("batch_norm_{0}".format(index), bn)
 
-            #Check the activation. 
+            #Check the activation.
             #It is either Linear or a Leaky ReLU for YOLO
             if activation == "leaky":
                 activn = nn.LeakyReLU(0.1, inplace = True)
@@ -117,7 +117,7 @@ def create_modules(blocks):
             stride = int(x["stride"])
             upsample = nn.Upsample(scale_factor = 2, mode = "bilinear")
             module.add_module("upsample_{}".format(index), upsample)
-            
+
         #If it is a route layer
         elif (x["type"] == "route"):
             x["layers"] = x["layers"].split(',')
@@ -129,7 +129,7 @@ def create_modules(blocks):
             except:
                 end = 0
             #Positive anotation
-            if start > 0: 
+            if start > 0:
                 start = start - index
             if end > 0:
                 end = end - index
@@ -157,11 +157,11 @@ def create_modules(blocks):
 
             detection = DetectionLayer(anchors)
             module.add_module("Detection_{}".format(index), detection)
-        
+
         module_list.append(module)
         prev_filters = filters
         output_filters.append(filters)
-        
+
     return (net_info, module_list)
 
 class EmptyLayer(nn.Module):
@@ -173,6 +173,12 @@ class DetectionLayer(nn.Module):
     def __init__(self, anchors):
         super(DetectionLayer, self).__init__()
         self.anchors = anchors
+
+class Darknet(nn.Module):
+    def __init__(self, cfgfile):
+        super(Darknet, self).__init__()
+        self.blocks = parse_cfg(cfgfile)
+        self.net_info, self.module_list = create_modules(self.blocks)
 
 
 blocks = parse_cfg("cfg/yolov3.cfg")
