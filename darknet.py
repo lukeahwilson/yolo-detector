@@ -180,6 +180,47 @@ class Darknet(nn.Module):
         self.blocks = parse_cfg(cfgfile)
         self.net_info, self.module_list = create_modules(self.blocks)
 
+    def forward(self, x, CUDA):
+        modules = self.blocks[1:]
+        outputs = {}   #We cache the outputs for the route layer
+
+        write = 0     #This is explained a bit later
+        for i, module in enumerate(modules):
+            module_type = (module["type"])
+
+            if module_type == "convolutional" or module_type == "upsample":
+                x = self.module_list[i](x)
+
+            elif module_type == "route":
+                layers = module["layers"]
+                layers = [int(a) for a in layers]
+
+                # This part appears to simply convert the reference point to be relative to the current layer
+                # This is because if the layer value is positive, than we concatenate the absolute index of the layer
+                # But if the layer value is negative, it is a relative index, and we move to that layer. This makes it relative either way
+                if (layers[0]) > 0:
+                    layers[0] = layers[0] - i
+
+                # layers length is 1, make x equal to the cached output from the called route layer
+                if len(layers) == 1:
+                    x = outputs[i + (layers[0])] # (i is current layer, + the relative index)
+
+                else: # I really don't like the structure of this statement, it depends a lot on config structure and isn't generalized)
+                    if (layers[1]) > 0: # The second layer goes through the same absolute to relative conversion
+                        layers[1] = layers[1] - i
+
+                    # Note that concatenate is not the same as add, the two layers remain separate with separate weight matrices
+                    # combine the multiple route layers if the route length is greater than 1 and concatenate it to make x
+                    map1 = outputs[i + layers[0]]
+                    map2 = outputs[i + layers[1]]
+
+                    x = torch.cat((map1, map2), 1)
+
+            elif  module_type == "shortcut": # This is so similar to the route layer except for summing the x with the previous layers x
+                from_ = int(module["from"])
+                x = outputs[i-1] + outputs[i+from_]
+
+
 
 blocks = parse_cfg("cfg/yolov3.cfg")
 print(create_modules(blocks))
