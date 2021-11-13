@@ -33,6 +33,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
+from util import *
 
 def parse_cfg(cfgfile):
     """
@@ -182,9 +183,9 @@ class Darknet(nn.Module):
 
     def forward(self, x, CUDA):
         modules = self.blocks[1:]
-        outputs = {}   #We cache the outputs for the route layer
+        outputs = {}   # We cache the outputs for the route layer
 
-        write = 0     #This is explained a bit later
+        write = 0     # Set flag to zero to wait for a detection before initializing collector
         for i, module in enumerate(modules):
             module_type = (module["type"])
 
@@ -219,6 +220,35 @@ class Darknet(nn.Module):
             elif  module_type == "shortcut": # This is so similar to the route layer except for summing the x with the previous layers x
                 from_ = int(module["from"])
                 x = outputs[i-1] + outputs[i+from_]
+
+            elif module_type == 'yolo':
+
+
+                anchors = self.module_list[i][0].anchors
+                # Get the input dimensions
+                inp_dim = int (self.net_info["height"])
+
+                # Get the number of classes
+                num_classes = int (module["classes"])
+
+                #Transform
+                x = x.data
+                x = predict_transform(x, inp_dim, anchors, num_classes, CUDA)
+
+                # initialize the collector cycle for concatenating detections
+                if not write:              # if no collector has been intialised.
+                    detections = x
+                    write = 1
+
+                # if already initialized, concatenate to collect detections
+                else:
+                    detections = torch.cat((detections, x), 1)
+
+            # Cache the output for use in shortcut and route layers
+            outputs[i] = x
+
+            return detections
+
 
 
 
