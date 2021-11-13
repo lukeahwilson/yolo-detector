@@ -26,117 +26,71 @@
 ##
 
 # Import libraries
-import time, os, random
+from __future__ import division
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.autograd import Variable
 import numpy as np
-from PIL import Image
-import matplotlib.pyplot as plt
+import cv2
 
-# Import handmade machine learning functions for use in main
-from cnn_model_functions import *
-from cnn_utility_functions import *
-from cnn_operational_functions  import *
+def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
+    print('prediction 0', prediction[0])
+    batch_size = prediction.size(0)
 
+    print('prediction 2', prediction[2])
 
-def main():
-    '''
-    # Retrieve command line arguments to dictate model type, training parameters, and data
-    # Load image datasets, process the image data, and convert these into data generators
-    # Create a default naming structure to save and load information at a specified directory
-    # Download a pretrained model using input arguments and attach new fully connected output Layers
-    # Define criterion for loss, if training is required by the input arg, execute the following:
-    #    o Prompt user for overfit training, if yes, initiate training against pretrained features
-    #    o Prompt user for complete training, if yes, initiate training against pretrained features
-    #    o Save the hyperparameters, training history, and training state for the overfit and full models
-    # If training is no requested by the input arg, execute the following:
-    #    o Load in a pretrained model's state dict and it's model_hyperparameters
-    #    o Display the training history for this model
-    # Provide prompt to test the model and perform and display performance if requested
-    # Provide prompt to apply the model towards inference and put model to work if requested
-    # Show an example prediction from the inference
-    '''
-    # Call ArgumentParser for user arguments and store in arg
-    arg = u1_get_input_args()
-    data_dir = os.path.expanduser('~') + '/Programming Data/' + arg.dir + '/'
+    # determine what stride was used in total to move the original image to the new prediction size
+    stride =  inp_dim // prediction.size(2)
 
-    # Call data processor to return a dictionary of datasets, the data labels, and the class labels
-    dict_datasets, dict_data_labels, dict_class_labels = u2_load_processed_data(data_dir)
+    # construct the detection grid to enable multiple detections, stride is
+    grid_size = inp_dim // stride
 
-    # Call data iterator to convert dictionary of datasets to dictionary of dataloaders
-    dict_data_loaders = u4_data_iterator(dict_datasets)
+    # create number of attributes, this is the four box dimensions, the objectness, and the classes
+    bbox_attrs = 5 + num_classes
+    num_anchors = len(anchors)
 
-    #Create file pathway and naming convention saving and loading files in program
-    file_name_scheme =  data_dir + 'models/' + os.path.basename(os.path.dirname(data_dir))\
-                    + '_' + arg.model + '_' + str(arg.layer) + 'lay'
-    print(file_name_scheme)
-    # Call create classifier to return a model leveraging a desired pretrained architecture, define loss criterion
-    model = m1_create_classifier(arg.model, arg.layer, len(dict_datasets['train_data'].classes))
-    criterion = nn.NLLLoss()
+    # here we are flattening the prediction space for processing, leaving the depth as rows
+    prediction = prediction.view(batch_size, bbox_attrs*num_anchors, grid_size*grid_size)
+    prediction = prediction.transpose(1,2).contiguous()
+    prediction = prediction.view(batch_size, grid_size*grid_size*num_anchors, bbox_attrs)
 
-    # Define start condition hyperparameters and key running information such as elapsed training time
-    # epoch_on and running_count refer to the epoch in which deeper layers started training and for how long
-    model_hyperparameters = {'learnrate': arg.learn,
-                         'training_loss_history': [],
-                         'validate_loss_history': [],
-                         'epoch_on': [],
-                         'running_count': 0,
-                         'weightdecay' : 0.00001,
-                         'training_time' : 0}
+    anchors = [(a[0]/stride, a[1]/stride) for a in anchors]
 
-    # If user requests load, call load checkpoint to return model and hyperparameters, then plot loaded information
-    if arg.load == 'y':
-        model, model_hyperparameters = m3_load_model_checkpoint(model, file_name_scheme)
-        o5_plot_training_history(arg.model, model_hyperparameters, file_name_scheme)
+    # Sigmoid the  centre_X, centre_Y. and object confidencce
+    prediction[:,:,0] = torch.sigmoid(prediction[:,:,0])
+    prediction[:,:,1] = torch.sigmoid(prediction[:,:,1])
+    prediction[:,:,4] = torch.sigmoid(prediction[:,:,4])
 
-    # If user requests train, first display an example piece of data from the processed training set
-    if arg.train == 'y':
-        # NOTE 1: Processed data is tensor shape [xpixel, ypixel, colour], matplotlib takes order [c, x, y], so we transpose
-        # NOTE 2: Plotted images blocks function continuation, unblock requires pause to load image or image will freeze
-        print('Displaying an example processed image from the training set..\n')
-        plt.imshow(random.choice(dict_datasets['train_data'])[0].numpy().transpose((1, 2, 0))) # NOTE: 1
-        plt.show(block=False) # NOTE: 2
-        plt.pause(2)
-        plt.close()
+    # Add the grid center offsets to the center cordinates prediction.
+    grid = np.arange(grid_size)
+    a,b = np.meshgrid(grid, grid)
 
-        # Call train model with model and training dataset to return trained model and hyperparameters, then plot and save
-        model, model_hyperparameters = o1_train_model(model, dict_data_loaders['train_loader'],
-                        dict_data_loaders['valid_loader'], arg.epoch, 0.6, model_hyperparameters, criterion)
-        o5_plot_training_history(arg.model, model_hyperparameters, file_name_scheme, 'complete')
+    x_offset = torch.FloatTensor(a).view(-1,1)
+    y_offset = torch.FloatTensor(b).view(-1,1)
 
-        # Prompt user to save, save the model and its hyperparameters per the naming convention
-        if u5_time_limited_input('Would you like to save the model?'):
-            m2_save_model_checkpoint(model, file_name_scheme, model_hyperparameters)
+    if CUDA:
+        x_offset = x_offset.cuda()
+        y_offset = y_offset.cuda()
 
-    # If user requests no load and no train, prompt to run an overfit training exercise and execute if requested
-    # NOTE: Same as training but on an overfit dataset. overfit_model metadata references the same data as the model metadata
-    if arg.train == 'n' and arg.load == 'n':
-        if u5_time_limited_input('Check model can overfit small dataset?'):
-            overfit_model, overfit_model_hyperparameters = o1_train_model(model, dict_data_loaders['overfit_loader'],
-                            dict_data_loaders['valid_loader'], arg.epoch, 0.9, model_hyperparameters, criterion)
-            o5_plot_training_history(arg.model, overfit_model_hyperparameters, file_name_scheme, 'overfit')
+    x_y_offset = torch.cat((x_offset, y_offset), 1).repeat(1,num_anchors).view(-1,2).unsqueeze(0)
 
-    # If user requests load, or has requested training and training has completed, the model is ready for predictions
-    if arg.train == 'y' or arg.load == 'y':
-        print('The model is ready to provide predictions\n')
+    prediction[:,:,:2] += x_y_offset
 
-        # Prompt to test the model's performance
-        # Gives the testing data loader to the validation function and returns performance
-        if u5_time_limited_input('Would you like to test the model?'):
-            t0 = time.time()
-            test_count_correct, ave_test_loss = o3_model_no_backprop(model, dict_data_loaders['test_loader'], criterion)
-            print('\nTesting Loss: {:.3f}.. '.format(ave_test_loss),
-                'Testing Accuracy: {:.3f}'.format(test_count_correct / len(dict_data_loaders['test_loader'].dataset)),
-                'Runtime - {:.0f} seconds\n'.format((time.time() - t0)))
+    # Apply the anchors to the dimensions of the bounding box.
+    # log space transform height and the width
+    anchors = torch.FloatTensor(anchors)
 
-        # Prompt the user to use the model for inference
-        # Gives an unlabeled dataloader to a predict function and returns predictions
-        if u5_time_limited_input('Would you like to use the model for inference?'):
-            t1 = time.time()
-            dict_prediction_results = o6_predict_data(model, dict_data_loaders['predict_loader'],
-                            dict_data_labels, dict_class_labels)
-            print('Runtime - {:.0f} seconds\n'.format((time.time() - t1)),
-                            [dict_prediction_results[key][0][0] for key in dict_prediction_results])
-            o7_show_prediction(data_dir, dict_prediction_results)
+    if CUDA:
+        anchors = anchors.cuda()
 
+    anchors = anchors.repeat(grid_size*grid_size, 1).unsqueeze(0)
+    prediction[:,:,2:4] = torch.exp(prediction[:,:,2:4])*anchors
 
-if __name__ == "__main__":
-    main()
+    prediction[:,:,5: 5 + num_classes] = torch.sigmoid((prediction[:,:, 5 : 5 + num_classes]))
+
+    # Now we use the stride scalar to resize the prediction values to that which corresponds to the size of the image
+    # This way we don't have bounding boxes, sized in width and height for a small detection map, but instead for plotting on the image
+    prediction[:,:,:4] *= stride
+
+    return prediction
