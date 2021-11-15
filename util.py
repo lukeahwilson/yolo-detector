@@ -35,10 +35,8 @@ import numpy as np
 import cv2
 
 def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
-    print('prediction 0', prediction[0])
-    batch_size = prediction.size(0)
 
-    print('prediction 2', prediction[2])
+    batch_size = prediction.size(0)
 
     # determine what stride was used in total to move the original image to the new prediction size
     stride =  inp_dim // prediction.size(2)
