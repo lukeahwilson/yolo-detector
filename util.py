@@ -4,8 +4,10 @@
 # REVISED DATE: 2021-??-??
 # References:
 #   - https://blog.paperspace.com/how-to-implement-a-yolo-object-detector-in-pytorch/
+# NOTE:
+#   - Work in progress
 # PURPOSE:
-#   - API to train and apply leveraged pretrained vision models for classification
+#   - API to train and apply leveraged pretrained vision models for detection
 # REQUIREMENTS:
 #   - Pretained model is downloaded and can be trained on a dataset by user
 #   - The number of attached fully connected layers is customizable by the user
@@ -36,8 +38,9 @@ import cv2
 
 def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
 
-    batch_size = prediction.size(0)
+    batch_size = prediction.size(0) # Normally I use length()
 
+    # NOTE: stride is terminologically loose here. We're inferring approx. size accros cnn by 2d dimensional difference
     # determine what stride was used in total to move the original image to the new prediction size
     stride =  inp_dim // prediction.size(2)
 
@@ -49,42 +52,70 @@ def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
     num_anchors = len(anchors)
 
     # here we are flattening the prediction space for processing, leaving the depth as rows
+    # I normally tackle this using x = x.view(x.shape[0], -1), need to print some shapes to compare
     prediction = prediction.view(batch_size, bbox_attrs*num_anchors, grid_size*grid_size)
+
+    # We swap grid list and box rows so the row information is last
     prediction = prediction.transpose(1,2).contiguous()
+
+    # We further lengthen to separate anchors
     prediction = prediction.view(batch_size, grid_size*grid_size*num_anchors, bbox_attrs)
 
+    # Rescaling the anchors to match the resized image, I don't like how this expression is restricted to 2 anchors
     anchors = [(a[0]/stride, a[1]/stride) for a in anchors]
 
-    # Sigmoid the  centre_X, centre_Y. and object confidencce
+    # Sigmoid the centre_X, centre_Y. and object confidencce
     prediction[:,:,0] = torch.sigmoid(prediction[:,:,0])
     prediction[:,:,1] = torch.sigmoid(prediction[:,:,1])
     prediction[:,:,4] = torch.sigmoid(prediction[:,:,4])
 
-    # Add the grid center offsets to the center cordinates prediction.
+    # Create an arange from 0 to the length of on side of the constructed detection grid
     grid = np.arange(grid_size)
-    a,b = np.meshgrid(grid, grid)
 
+    # Add the grid center offsets to the center cordinates prediction.
+    # Create a meshgrid that counts from 0 up to the grid_size
+    # Copy meshgrid counting upward in rows from left to right for a, and from top to bottom in b
+    a, b = np.meshgrid(grid, grid)
+
+    # Now we flatten the first (a) mesh, creating a list of x indexes for the grid counting 0-9, 0-9... 10 times
     x_offset = torch.FloatTensor(a).view(-1,1)
+
+    # Now we flatten the second (b) mesh, creating a list of y indexes for the grid with 10 0s, then 10 1s... 10 9s.
     y_offset = torch.FloatTensor(b).view(-1,1)
 
+    # NOTE: This CUDA call seems out of place and also doesn't resolve CUDA errors. I'll find a better place later
     if CUDA:
         x_offset = x_offset.cuda()
         y_offset = y_offset.cuda()
 
+    # So effectively, we've got two lists now that describe indexed x-y coordinates for a detection grid
+    # Now we concatenate them, specifying dimension 1, so that the concatenation happens accros columns
+    # This results in a [grid_size x grid_size, by 2] matrix where each row is an x and y coordinate for a grid cell
+    # Next we repeat the grid for the number of anchors used per box, then reshape it again with .view(-1, 2)
+    # The result is a [grid_size x grid_size x 2, by 2] matrix, listing the grid coordinates of the first than second anchor
     x_y_offset = torch.cat((x_offset, y_offset), 1).repeat(1,num_anchors).view(-1,2).unsqueeze(0)
 
+    # Wow, that is one hell of an expression above. I am absolutely certain there is a more elegant methodolgy
+    # It seems to me we could loop build a matrix, and then just broadcast to it with additions/etc
+    # We now sum the sigmoided box prediction coordinates with the detection grid position
+    # NOTE: This matches the mathematical theory for anchor box translation sig(predx)+(anchorx)=boxx (same for y)
     prediction[:,:,:2] += x_y_offset
 
     # Apply the anchors to the dimensions of the bounding box.
     # log space transform height and the width
     anchors = torch.FloatTensor(anchors)
 
+    # Can we not just CUDA the system at the beginning? NOTE: return to this, it errors out anyways
     if CUDA:
         anchors = anchors.cuda()
 
+    # Once again creating another meshgrid of anchors to represent the detection grid with anchors at every cell
     anchors = anchors.repeat(grid_size*grid_size, 1).unsqueeze(0)
+
+    # NOTE: This matches the mathematical theory for anchor box transformation (anchorwid)*exp(predwid)=boxwid (same for height)
     prediction[:,:,2:4] = torch.exp(prediction[:,:,2:4])*anchors
 
+    # I would have thought this could just run to the end ([:,:,5:]) but maybe not. Sigmoid the class predictions
     prediction[:,:,5: 5 + num_classes] = torch.sigmoid((prediction[:,:, 5 : 5 + num_classes]))
 
     # Now we use the stride scalar to resize the prediction values to that which corresponds to the size of the image
@@ -101,16 +132,16 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
     # If a bounding box has an objectness score below a threshold, set the entire row (all attributes) to zero
     # Note: Need to print this section to visually confirm operation running as predicted
     conf_mask = (prediction[:,:,4] > confidence).float().unsqueeze(2)
-    prediction = prediction*conf_mask
+    prediction = prediction*conf_mask # I think there is some broadcasting happening here, need to run the code to check
 
     # Boxes have 4 indexes that conform to the center x coordinate, y coordinate, and box height and width
     # We convert this to top left and bottom right corner coordinates to make IOU calculation easier
-    box_corner = prediction.new(prediction.shape)
-    box_corner[:,:,0] = (prediction[:,:,0] - prediction[:,:,2]/2)
-    box_corner[:,:,1] = (prediction[:,:,1] - prediction[:,:,3]/2)
-    box_corner[:,:,2] = (prediction[:,:,0] + prediction[:,:,2]/2)
-    box_corner[:,:,3] = (prediction[:,:,1] + prediction[:,:,3]/2)
-    prediction[:,:,:4] = box_corner[:,:,:4]
+    box_corner = prediction.new(prediction.shape) # I believe separating box_corner as newly instantiated matrix
+    box_corner[:,:,0] = (prediction[:,:,0] - prediction[:,:,2]/2) # Now we can make values equal to translated predictions
+    box_corner[:,:,1] = (prediction[:,:,1] - prediction[:,:,3]/2) # Repeat for y coordinate using height of box
+    box_corner[:,:,2] = (prediction[:,:,0] + prediction[:,:,2]/2) # New x coordinate for bottom right with box width
+    box_corner[:,:,3] = (prediction[:,:,1] + prediction[:,:,3]/2) # Finally set bottom right with height
+    prediction[:,:,:4] = box_corner[:,:,:4] # Replace 0, 1, 2, 3 box prediction values with the box corner values
 
     # Each image has a different number of detections and thus a different required operations.
     # Thus we cannot vectorize and compute detections in parallel and instead must loop through the predictions.
@@ -118,10 +149,9 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
 
     write = False
 
+
     for ind in range(batch_size):
         image_pred = prediction[ind]          #image Tensor
-        #confidence threshholding
-        #NMS
 
         # Pick the maximum class score which starts after objectness and the 4 box numbers and goes for number of classes
         # NOTE: I wonder if there would be improved Non Max Suppression by keeping second and third class choices around
@@ -182,6 +212,7 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
                 #Remove the non-zero entries
                 non_zero_ind = torch.nonzero(image_pred_class[:,4]).squeeze()
                 image_pred_class = image_pred_class[non_zero_ind].view(-1,7)
+
 
 # Function to return list of unique detected classes in the image from a list of detections
 def unique(tensor):
