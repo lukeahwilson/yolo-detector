@@ -92,3 +92,59 @@ def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
     prediction[:,:,:4] *= stride
 
     return prediction
+
+
+# Function to take prediction and objectness scores, number of classes, and threshold for IOU and NMS
+# The prediction shape is [# images in batch, # boxes predicted per image = 10647, 85 = 1 objectness, 4 boxes, 80 classes]
+def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
+
+    # If a bounding box has an objectness score below a threshold, set the entire row (all attributes) to zero
+    # Note: Need to print this section to visually confirm operation running as predicted
+    conf_mask = (prediction[:,:,4] > confidence).float().unsqueeze(2)
+    prediction = prediction*conf_mask
+
+    # Boxes have 4 indexes that conform to the center x coordinate, y coordinate, and box height and width
+    # We convert this to top left and bottom right corner coordinates to make IOU calculation easier
+    box_corner = prediction.new(prediction.shape)
+    box_corner[:,:,0] = (prediction[:,:,0] - prediction[:,:,2]/2)
+    box_corner[:,:,1] = (prediction[:,:,1] - prediction[:,:,3]/2)
+    box_corner[:,:,2] = (prediction[:,:,0] + prediction[:,:,2]/2)
+    box_corner[:,:,3] = (prediction[:,:,1] + prediction[:,:,3]/2)
+    prediction[:,:,:4] = box_corner[:,:,:4]
+
+    # Each image has a different number of detections and thus a different required operations.
+    # Thus we cannot vectorize and compute detections in parallel and instead must loop through the predictions.
+    batch_size = prediction.size(0)
+
+    write = False
+
+    for ind in range(batch_size):
+        image_pred = prediction[ind]          #image Tensor
+        #confidence threshholding
+        #NMS
+
+        # Pick the maximum class score which starts after objectness and the 4 box numbers and goes for number of classes
+        # NOTE: I wonder if there would be improved Non Max Suppression by keeping second and third class choices around
+        # to compare against surrounding detections and suppress if there are collisions between a second choice and first
+        max_conf, max_conf_score = torch.max(image_pred[:,5:5+ num_classes], 1)
+        max_conf = max_conf.float().unsqueeze(1)
+        max_conf_score = max_conf_score.float().unsqueeze(1)
+        seq = (image_pred[:,:5], max_conf, max_conf_score)
+        image_pred = torch.cat(seq, 1)
+
+        # Get rid of bounding box scores with object confidence lower than threshhold
+        non_zero_ind =  (torch.nonzero(image_pred[:,4]))
+        # If no detections at all, then there would be an error, so we use try
+        try:
+            image_pred_ = image_pred[non_zero_ind.squeeze(),:].view(-1,7)
+        except:
+            continue
+
+        #For PyTorch 0.4 compatibility
+        #Since the above code with not raise exception for no detection
+        #as scalars are supported in PyTorch 0.4
+        if image_pred_.shape[0] == 0:
+            continue
+
+        #Get the various classes detected in the image
+        img_classes = unique(image_pred_[:,-1]) # -1 index holds the class index
