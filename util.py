@@ -148,3 +148,47 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
 
         #Get the various classes detected in the image
         img_classes = unique(image_pred_[:,-1]) # -1 index holds the class index
+
+        #Time to perform the Non Max Suppresion algorithm
+        for cls in img_classes:
+            # NOTE: I need to read this entire thing in details and really understand it better
+
+            #get the detections with one particular class
+            cls_mask = image_pred_*(image_pred_[:,-1] == cls).float().unsqueeze(1)
+            class_mask_ind = torch.nonzero(cls_mask[:,-2]).squeeze()
+            image_pred_class = image_pred_[class_mask_ind].view(-1,7)
+
+            #sort the detections such that the entry with the maximum objectness
+            #confidence is at the top
+            conf_sort_index = torch.sort(image_pred_class[:,4], descending = True )[1]
+            image_pred_class = image_pred_class[conf_sort_index]
+            idx = image_pred_class.size(0)   #Number of detections
+
+            for i in range(idx):
+                #Get the IOUs of all boxes that come after the one we are looking at
+                #in the loop
+                try:
+                    ious = bbox_iou(image_pred_class[i].unsqueeze(0), image_pred_class[i+1:])
+                except ValueError:
+                    break
+
+                except IndexError:
+                    break
+
+                #Zero out all the detections that have IoU > treshhold
+                iou_mask = (ious < nms_conf).float().unsqueeze(1)
+                image_pred_class[i+1:] *= iou_mask
+
+                #Remove the non-zero entries
+                non_zero_ind = torch.nonzero(image_pred_class[:,4]).squeeze()
+                image_pred_class = image_pred_class[non_zero_ind].view(-1,7)
+
+# Function to return list of unique detected classes in the image from a list of detections
+def unique(tensor):
+    tensor_np = tensor.cpu().numpy()
+    unique_np = np.unique(tensor_np)
+    unique_tensor = torch.from_numpy(unique_np)
+
+    tensor_res = tensor.new(unique_tensor.shape)
+    tensor_res.copy_(unique_tensor)
+    return tensor_res
