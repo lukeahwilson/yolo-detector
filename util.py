@@ -217,6 +217,23 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
                 non_zero_ind = torch.nonzero(image_pred_class[:,4]).squeeze()
                 image_pred_class = image_pred_class[non_zero_ind].view(-1,7)
 
+            # # NOTE: Need to review this term below
+            batch_ind = image_pred_class.new(image_pred_class.size(0), 1).fill_(ind)
+            #Repeat the batch_id for as many detections of the class cls in the image
+            seq = batch_ind, image_pred_class
+
+            if not write:
+                output = torch.cat(seq,1)
+                write = True
+            else:
+                out = torch.cat(seq,1)
+                output = torch.cat((output,out))
+
+    try:
+        return output
+    except:
+        return 0
+
 
 def bbox_iou(box1, box2):
     """

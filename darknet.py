@@ -168,7 +168,7 @@ def create_modules(blocks):
             anchors = [(anchors[i], anchors[i+1]) for i in range(0, len(anchors),2)] # Reset list in groupings of 2
             anchors = [anchors[i] for i in mask] # I guess we only want to use the first three anchors for detection
 
-            detection = DetectionLayer(anchors)
+            detection = DetectionLayer(anchors) # Calls detection layer class, creating an object with attached anchors
             module.add_module("Detection_{}".format(index), detection)
 
         module_list.append(module)
@@ -186,6 +186,7 @@ class DetectionLayer(nn.Module):
     def __init__(self, anchors):
         super(DetectionLayer, self).__init__()
         self.anchors = anchors
+
 
 class Darknet(nn.Module):
     def __init__(self, cfgfile):
