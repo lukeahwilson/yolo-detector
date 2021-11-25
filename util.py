@@ -126,13 +126,14 @@ def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
 
 
 # Function to take prediction and objectness scores, number of classes, and threshold for IOU and NMS
-# The prediction shape is [# images in batch, # boxes predicted per image = 10647, 85 = 1 objectness, 4 boxes, 80 classes]
+# The prediction shape is [# images in batch, # boxes predicted per image = 10647, 85 = 4 boxes +  1 objectness + 80 classes]
 def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
 
     # If a bounding box has an objectness score below a threshold, set the entire row (all attributes) to zero
     # Note: Need to print this section to visually confirm operation running as predicted
-    conf_mask = (prediction[:,:,4] > confidence).float().unsqueeze(2)
-    prediction = prediction*conf_mask # I think there is some broadcasting happening here, need to run the code to check
+    conf_mask = (prediction[:,:,4] > confidence).float().unsqueeze(2) # Shape = [#images batch, # boxes, index 4 from prediction as boolean 0 or 1]
+    prediction = prediction*conf_mask # Conducts broadcasting here, where the boolean is multiplied across the matrix to zero out any objectness below confidence
+    # NOTE: that index 4 is holding the objectness value. the conf_mask temporarily uses the objectness against confidence to set low confidence information to zero
 
     # Boxes have 4 indexes that conform to the center x coordinate, y coordinate, and box height and width
     # We convert this to top left and bottom right corner coordinates to make IOU calculation easier
@@ -149,52 +150,68 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
 
     write = False
 
-
-    for ind in range(batch_size):
-        image_pred = prediction[ind]          #image Tensor
+    # Now we iterate through our batch of images
+    for image in range(batch_size):
+        image_prediction = prediction[image]          #image Tensor
 
         # Pick the maximum class score which starts after objectness and the 4 box numbers and goes for number of classes
         # NOTE: I wonder if there would be improved Non Max Suppression by keeping second and third class choices around
         # to compare against surrounding detections and suppress if there are collisions between a second choice and first
-        max_conf, max_conf_score = torch.max(image_pred[:,5:5+ num_classes], 1)
-        max_conf = max_conf.float().unsqueeze(1)
-        max_conf_score = max_conf_score.float().unsqueeze(1)
-        seq = (image_pred[:,:5], max_conf, max_conf_score)
-        image_pred = torch.cat(seq, 1)
+        max_class_confidence, max_class_index = torch.max(image_prediction[:,5:5 + num_classes], 1)
+        # Torch max returns tuple (max, max_indices) The one '1' takes max across row, preserving column dimension
+        seq = (image_prediction[:,:5], max_class_confidence.float().unsqueeze(1), max_class_index.float().unsqueeze(1))
+        # We unsqueeze the values, so that we can add them into a tuple
+        # seq contains the 10647 x 5 bounding boxes (4) + objectness (1) in first position, the 10647 x 1 classes in second position,
+        # and the 10647 x 1 class confidences in the third position. The lenth of seq is 3.
+        # print(seq[0], 'Column Boxes and Objectness')
+        # print(seq[1], 'Column class confidence')
+        # print(seq[2], 'Column chosen class')
+
+        image_prediction = torch.cat(seq, 1) # This line of code concatenates the three individual tensors arranged in the tuple
+        # back into a single tensor, 10647 x 7, where [#,6] is the 7th column containing the chosen class or class index
+
 
         # Get rid of bounding box scores with object confidence lower than threshhold
-        non_zero_ind =  (torch.nonzero(image_pred[:,4]))
+        # Search all rows along column 4 (objectness) and only return rows that are non zero objectness (set by conf_mask)
+        non_zero_objectness =  (torch.nonzero(image_prediction[:,4]))
+
         # If no detections at all, then there would be an error, so we use try
         try:
-            image_pred_ = image_pred[non_zero_ind.squeeze(),:].view(-1,7)
+            # So now we have a non_zero_objectness tensor that is less than 10647 (since there will be zeros) by 1 (the non zero object confidence)
+            # We use the non_zero_objectness tensor, to search our image_prediction row. We squeeze it first to remove the individual lists and make it just numbers
+            # So instead of say 5007 x 1 (each 1 having an objectness) it's 5007 objectness numbers. We search and return the rows. View isn't necessary
+            # MOVING FORWARD OUR MATRIX OF POSSIBLE DETECTIONS IS A FRACTION OF THE ORIGINAL TOTAL 10647 ATTEMPTS
+            image_positive_prediction = image_prediction[non_zero_objectness.squeeze(),:].view(-1,7)
         except:
             continue
-
-        #For PyTorch 0.4 compatibility
-        #Since the above code with not raise exception for no detection
-        #as scalars are supported in PyTorch 0.4
-        if image_pred_.shape[0] == 0:
-            continue
+        #
+        # #For PyTorch 0.4 compatibility
+        # #Since the above code with not raise exception for no detection
+        # #as scalars are supported in PyTorch 0.4
+        # if image_positive_prediction.shape[0] == 0:
+        #     continue
 
         # Get the various classes detected in the image, this looks like it might error if there are no detections above
-        img_classes = unique(image_pred_[:,-1]) # -1 index holds the class index
+        img_classes = unique(image_positive_prediction[:,-1]) # -1 index holds the class index
 
         # Time to perform the Non Max Suppresion algorithm
         # NOTE: I need to read this entire thing in details and really understand it better
         # Iterate through the detected classes, one class at a time
         for cls in img_classes:
 
-            # Get the detections with one particular class
-            cls_mask = image_pred_*(image_pred_[:,-1] == cls).float().unsqueeze(1)
-
-            # Not sure what the point of unsqueeze squeeze is.
+            # Return boolean of positive prediction matrix detecting the iterated class, multiply to get the detections with one particular class.
+            cls_mask = image_positive_prediction*(image_positive_prediction[:,-1] == cls).float().unsqueeze(1)
+            # Now we use non.zero to return the row index of each row with a true boolean. -2 is irrelevant, any nonzero column works
             class_mask_ind = torch.nonzero(cls_mask[:,-2]).squeeze()
+            # Now we search our original prediction matrix for the rows with the non-zero indices and return it in a specific view
+            image_pred_class = image_positive_prediction[class_mask_ind].view(-1,7)
 
-            image_pred_class = image_pred_[class_mask_ind].view(-1,7)
+            # THIS CAN ALL BE REPLACED WITH ONE ELEGANT LINE OF CODE RIGHT HERE
+            image_pred_class = image_positive_prediction[image_positive_prediction[:,-1] == cls]
 
             # sort the detections such that the entry with the maximum objectness
             # confidence is at the top
-            conf_sort_index = torch.sort(image_pred_class[:,4], descending = True )[1]
+            conf_sort_index = torch.sort(image_pred_class[:,4], descending = True)[1]
             image_pred_class = image_pred_class[conf_sort_index]
             idx = image_pred_class.size(0)   #Number of detections
 
@@ -205,7 +222,6 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
                     ious = bbox_iou(image_pred_class[i].unsqueeze(0), image_pred_class[i+1:])
                 except ValueError:
                     break
-
                 except IndexError:
                     break
 
@@ -214,12 +230,14 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
                 image_pred_class[i+1:] *= iou_mask
 
                 #Remove the non-zero entries
-                non_zero_ind = torch.nonzero(image_pred_class[:,4]).squeeze()
-                image_pred_class = image_pred_class[non_zero_ind].view(-1,7)
+                non_zero_objectness = torch.nonzero(image_pred_class[:,4]).squeeze()
+                image_pred_class = image_pred_class[non_zero_objectness].view(-1,7)
 
-            # # NOTE: Need to review this term below
-            batch_ind = image_pred_class.new(image_pred_class.size(0), 1).fill_(ind)
-            #Repeat the batch_id for as many detections of the class cls in the image
+                # Should be able to replace above lines with the same simplified lines of code
+
+            # Create a batch id to associate the detections to the batch id and repeat for all detections of every class in the image
+            batch_ind = image_pred_class.new(image_pred_class.size(0), 1).fill_(image)
+
             seq = batch_ind, image_pred_class
 
             if not write:

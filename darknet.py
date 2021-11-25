@@ -73,8 +73,8 @@ def parse_cfg(cfgfile):
             key,value = line.split("=")
             block[key.rstrip()] = value.lstrip()
     blocks.append(block)
-
     return blocks
+
 
 def create_modules(blocks):
     net_info = blocks[0]     #Captures the information about the input and pre-processing
@@ -176,6 +176,7 @@ def create_modules(blocks):
         output_filters.append(filters)
 
     return (net_info, module_list)
+
 
 class EmptyLayer(nn.Module):
     def __init__(self):
