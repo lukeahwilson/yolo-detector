@@ -357,16 +357,3 @@ class Darknet(nn.Module):
 
                 conv_weights = conv_weights.view_as(conv.weight.data)
                 conv.weight.data.copy_(conv_weights)
-
-blocks = parse_cfg("cfg/yolov3.cfg")
-# print(create_modules(blocks))
-
-
-model = Darknet("cfg/yolov3.cfg")
-model.cuda()
-inp = get_test_input()
-inp = inp.cuda()
-pred = model(inp, torch.cuda.is_available())
-print (pred)
-print(pred.shape)
-model.load_weights("yolov3.weights")

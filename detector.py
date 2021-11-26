@@ -105,21 +105,6 @@ assert inp_dim > 32
 if CUDA:
     model.cuda()
 
-#Set up the neural network
-print("Loading network.....")
-model = Darknet(args.cfgfile)
-model.load_weights(args.weightsfile)
-print("Network successfully loaded")
-
-model.net_info["height"] = args.reso
-inp_dim = int(model.net_info["height"])
-assert inp_dim % 32 == 0
-assert inp_dim > 32
-
-#If there's a GPU availible, put the model on GPU
-if CUDA:
-    model.cuda()
-
 #Set the model in evaluation mode
 model.eval()
 
@@ -227,6 +212,11 @@ for i in range(output.shape[0]):
     output[i, [1,3]] = torch.clamp(output[i, [1,3]], 0.0, im_dim_list[i,0])
     output[i, [2,4]] = torch.clamp(output[i, [2,4]], 0.0, im_dim_list[i,1])
 
+output_recast = time.time()
+class_load = time.time()
+colors = pkl.load(open("pallete", "rb"))
+print(random.choice(colors))
+
 draw = time.time()
 
 # This function draws the boxes and writes a label in the top corner of the boxes
@@ -236,17 +226,29 @@ def write(x, results, color):
     img = results[int(x[0])]
     cls = int(x[-1])
     label = "{0}".format(classes[cls])
-    cv2.rectangle(img, c1, c2,color, 1)
+    cv2.rectangle(img, c1, c2, color, 1)
     t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 1 , 1)[0]
     c2 = c1[0] + t_size[0] + 3, c1[1] + t_size[1] + 4
-    cv2.rectangle(img, c1, c2,color, -1)
+    cv2.rectangle(img, c1, c2, color, -1)
     cv2.putText(img, label, (c1[0], c1[1] + t_size[1] + 4), cv2.FONT_HERSHEY_PLAIN, 1, [225,255,255], 1);
     return img
 
-list(map(lambda x: write(x, loaded_ims), output))
+# Here we modify the images inside loaded_ims inplace.
 
+list(map(lambda x: write(x, loaded_ims, random.choice(colors)), output))
+print(args.det)
 det_names = pd.Series(imlist).apply(lambda x: "{}/det_{}".format(args.det,x.split("/")[-1]))
+
+
+det_names = pd.Series(imlist).apply(lambda x: "{}/det_{}".format(args.det,x.split("\\")[-1]))
+
+
 list(map(cv2.imwrite, det_names, loaded_ims))
+
+print(det_names)
+
+
+
 end = time.time()
 
 print("SUMMARY")

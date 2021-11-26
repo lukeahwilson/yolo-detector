@@ -184,13 +184,8 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
             image_positive_prediction = image_prediction[non_zero_objectness.squeeze(),:].view(-1,7)
         except:
             continue
-        #
-        # #For PyTorch 0.4 compatibility
-        # #Since the above code with not raise exception for no detection
-        # #as scalars are supported in PyTorch 0.4
-        # if image_positive_prediction.shape[0] == 0:
-        #     continue
 
+        
         # Get the various classes detected in the image, this looks like it might error if there are no detections above
         img_classes = unique(image_positive_prediction[:,-1]) # -1 index holds the class index
 
