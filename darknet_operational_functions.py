@@ -36,48 +36,53 @@ from torch.autograd import Variable
 import numpy as np
 import cv2
 
-def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
+def predict_transform(prediction, input_dim, anchors, total_classes, CUDA = True):
+    '''
+    Purpose:
+        - Receive yolo detection layer feature map and arguments
+        - Transform the feature map using arguments to represent predictions
+        - Return the transformed predictions
+    Arguments:
+        - prediction = CNN input as feature map from previous darknet layer
+            o prediction.size() = [# Images in batch, # attributes, feature map x-dimension, feature map y-dimension]
+            o # Attributes is 4 box scores, 1 box objectness, 80 classes
+        - input_dim = Dimensions of resized input images, set in config file
+        - anchors = Anchor dimensions for yolo detection grid, set in config file
+        - total_classes = Number of class outputs for classification branch of model
+    Returns:
+        - prediction = feature maps with transformations per math for stretching and moving anchor boxes
+    '''
+    batch_size = prediction.size(0)
 
-    batch_size = prediction.size(0) # Normally I use length()
+    # NOTE: Stride is terminologically loose here. We're taking the difference in the resized input image dimension and the
+    # prediction dimension at this layer to infer the approx. total stride used to reduce the original feature map size to this size.
+    stride =  input_dim // prediction.size(2)
 
-    # NOTE: stride is terminologically loose here. We're inferring approx. size accros cnn by 2d dimensional difference
-    # determine what stride was used in total to move the original image to the new prediction size
-    stride =  inp_dim // prediction.size(2)
+    # Save the size of the detection grid for this detection layer. Each of the 3 detection layers have a different size.
+    # The first grid size is 13, for large detections, than 26, for medium, and finally 52, for small detections.
+    grid_size = prediction.size(2)
 
-    # construct the detection grid to enable multiple detections, stride is
-    grid_size = inp_dim // stride
-
-    # create number of attributes, this is the four box dimensions, the objectness, and the classes
-    bbox_attrs = 5 + num_classes
+    # Create number of attributes, this is the four box dimensions, the objectness, and the classes
+    bbox_attrs = 5 + total_classes
     num_anchors = len(anchors)
 
-    # here we are flattening the prediction space for processing, leaving the depth as rows
-    # I normally tackle this using x = x.view(x.shape[0], -1), need to print some shapes to compare
-    prediction = prediction.view(batch_size, bbox_attrs*num_anchors, grid_size*grid_size)
+    # Here we are flattening the prediction space for processing, turning the x by y grid into a single line of values
+    prediction = prediction.view(prediction.size(0), prediction.size(1), -1)
 
-    # We swap grid list and box rows so the row information is last
+    # We swap grid list and box rows so that attribute information for each anchor is listed in rows for each grid cell
     prediction = prediction.transpose(1,2).contiguous()
 
-    # We further lengthen to separate anchors
+    # We further flatten, such that the last column is only the attributes, and the middle column is grid cells x anchors
     prediction = prediction.view(batch_size, grid_size*grid_size*num_anchors, bbox_attrs)
 
-    # Rescaling the anchors to match the resized image, I don't like how this expression is restricted to 2 anchors
-    anchors = [(a[0]/stride, a[1]/stride) for a in anchors]
-
-    # Sigmoid the centre_X, centre_Y. and object confidencce
-    prediction[:,:,0] = torch.sigmoid(prediction[:,:,0])
-    prediction[:,:,1] = torch.sigmoid(prediction[:,:,1])
-    prediction[:,:,4] = torch.sigmoid(prediction[:,:,4])
-
-    # Create an arange from 0 to the length of on side of the constructed detection grid
+    # Create an arange from 0 to the length of one side of the constructed detection grid
     grid = np.arange(grid_size)
 
-    # Add the grid center offsets to the center cordinates prediction.
-    # Create a meshgrid that counts from 0 up to the grid_size
+    # Add the grid center offsets to the center cordinates prediction. Create a meshgrid that counts from 0 up to the grid_size
     # Copy meshgrid counting upward in rows from left to right for a, and from top to bottom in b
     a, b = np.meshgrid(grid, grid)
 
-    # Now we flatten the first (a) mesh, creating a list of x indexes for the grid counting 0-9, 0-9... 10 times
+    # Now we flatten the first (a) mesh, creating a list of x indexes for the grid counting 0 to 9, 0 to 9... 10 times
     x_offset = torch.FloatTensor(a).view(-1,1)
 
     # Now we flatten the second (b) mesh, creating a list of y indexes for the grid with 10 0s, then 10 1s... 10 9s.
@@ -89,11 +94,11 @@ def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
         y_offset = y_offset.cuda()
 
     # So effectively, we've got two lists now that describe indexed x-y coordinates for a detection grid
-    # Now we concatenate them, specifying dimension 1, so that the concatenation happens accros columns
+    # Now we concatenate them, specifying dimension 1, so that the concatenation happens across columns
     # This results in a [grid_size x grid_size, by 2] matrix where each row is an x and y coordinate for a grid cell
     # Next we repeat the grid for the number of anchors used per box, then reshape it again with .view(-1, 2)
-    # The result is a [grid_size x grid_size x 2, by 2] matrix, listing the grid coordinates of the first than second anchor
-    x_y_offset = torch.cat((x_offset, y_offset), 1).repeat(1,num_anchors).view(-1,2).unsqueeze(0)
+    # The result is a [grid_size x grid_size x 2, by 2] matrix, listing the grid coordinates of each anchor
+    x_y_offset = torch.cat((x_offset, y_offset), 1).repeat(1, num_anchors).view(-1,2).unsqueeze(0)
 
     # Wow, that is one hell of an expression above. I am absolutely certain there is a more elegant methodolgy
     # It seems to me we could loop build a matrix, and then just broadcast to it with additions/etc
@@ -101,11 +106,18 @@ def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
     # NOTE: This matches the mathematical theory for anchor box translation sig(predx)+(anchorx)=boxx (same for y)
     prediction[:,:,:2] += x_y_offset
 
+    # Sigmoid the centre x, centre y, and object confidencce per mathematical equation for anchor box transformations
+    prediction[:,:,0] = torch.sigmoid(prediction[:,:,0])
+    prediction[:,:,1] = torch.sigmoid(prediction[:,:,1])
+    prediction[:,:,4] = torch.sigmoid(prediction[:,:,4])
+
+    # Rescaling the anchors to match the resized image. Each anchor has width and height that gets scaled by stride value
+    anchors = [(a[0]/stride, a[1]/stride) for a in anchors]
+
     # Apply the anchors to the dimensions of the bounding box.
-    # log space transform height and the width
     anchors = torch.FloatTensor(anchors)
 
-    # Can we not just CUDA the system at the beginning? NOTE: return to this, it errors out anyways
+    # Can we not just CUDA the system at the beginning?
     if CUDA:
         anchors = anchors.cuda()
 
@@ -115,23 +127,37 @@ def predict_transform(prediction, inp_dim, anchors, num_classes, CUDA = True):
     # NOTE: This matches the mathematical theory for anchor box transformation (anchorwid)*exp(predwid)=boxwid (same for height)
     prediction[:,:,2:4] = torch.exp(prediction[:,:,2:4])*anchors
 
-    # I would have thought this could just run to the end ([:,:,5:]) but maybe not. Sigmoid the class predictions
-    prediction[:,:,5: 5 + num_classes] = torch.sigmoid((prediction[:,:, 5 : 5 + num_classes]))
+    # Sigmoid all of the class predictions to obtain probabilistic regressions of class likelihood
+    prediction[:,:,5: 5 + total_classes] = torch.sigmoid((prediction[:,:,5:]))
 
-    # Now we use the stride scalar to resize the prediction values to that which corresponds to the size of the image
+    # Now we use the stride scalar to resize the box prediction values to that which corresponds to the size of the image
     # This way we don't have bounding boxes, sized in width and height for a small detection map, but instead for plotting on the image
     prediction[:,:,:4] *= stride
 
     return prediction
 
 
-# Function to take prediction and objectness scores, number of classes, and threshold for IOU and NMS
-# The prediction shape is [# images in batch, # boxes predicted per image = 10647, 85 = 4 boxes +  1 objectness + 80 classes]
-def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
-
+def write_results(prediction, confidence, total_classes, suppress_threshold = 0.4):
+    '''
+    Purpose:
+        - Receive input containing, images, boxes, objectness scores, classes, and threshold for IOU and NMS
+        - Transform the feature map using arguments to represent predictions
+        - Return the transformed predictions
+    Arguments:
+        - prediction = combined prediction from each of the three yolo detection layers
+            o 1st detection layer is 13x13 grid with 507 boxes, 2nd is 26x26 with 2028 boxes, 3rd is 52x52 with 8112 boxes
+            o shape = [# images in batch, # boxes predicted per image = 10647, 85 = 4 boxes +  1 objectness + 80 classes]
+        - confidence = Threshold for eliminating a box prediction based on its objectness score
+        - total_classes = Number of class outputs for classification branch of model (technically not required as built into data)
+        - supress_threshold = Threshold union of intersection between adjacent predictions for non-max-suppression
+    Returns:
+        - prediction = feature maps with transformations per math for stretching and moving anchor boxes
+    '''
     # If a bounding box has an objectness score below a threshold, set the entire row (all attributes) to zero
     # Note: Need to print this section to visually confirm operation running as predicted
     conf_mask = (prediction[:,:,4] > confidence).float().unsqueeze(2) # Shape = [#images batch, # boxes, index 4 from prediction as boolean 0 or 1]
+
+    # prediction = prediction[prediction[:,:,4] > confidence]
     prediction = prediction*conf_mask # Conducts broadcasting here, where the boolean is multiplied across the matrix to zero out any objectness below confidence
     # NOTE: that index 4 is holding the objectness value. the conf_mask temporarily uses the objectness against confidence to set low confidence information to zero
 
@@ -157,7 +183,7 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
         # Pick the maximum class score which starts after objectness and the 4 box numbers and goes for number of classes
         # NOTE: I wonder if there would be improved Non Max Suppression by keeping second and third class choices around
         # to compare against surrounding detections and suppress if there are collisions between a second choice and first
-        max_class_confidence, max_class_index = torch.max(image_prediction[:,5:5 + num_classes], 1)
+        max_class_confidence, max_class_index = torch.max(image_prediction[:,5:5 + total_classes], 1)
         # Torch max returns tuple (max, max_indices) The one '1' takes max across row, preserving column dimension
         seq = (image_prediction[:,:5], max_class_confidence.float().unsqueeze(1), max_class_index.float().unsqueeze(1))
         # We unsqueeze the values, so that we can add them into a tuple
@@ -171,28 +197,23 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
         # back into a single tensor, 10647 x 7, where [#,6] is the 7th column containing the chosen class or class index
 
 
-        # Get rid of bounding box scores with object confidence lower than threshhold
-        # Search all rows along column 4 (objectness) and only return rows that are non zero objectness (set by conf_mask)
-        non_zero_objectness =  (torch.nonzero(image_prediction[:,4]))
-
         # If no detections at all, then there would be an error, so we use try
         try:
-            # So now we have a non_zero_objectness tensor that is less than 10647 (since there will be zeros) by 1 (the non zero object confidence)
-            # We use the non_zero_objectness tensor, to search our image_prediction row. We squeeze it first to remove the individual lists and make it just numbers
-            # So instead of say 5007 x 1 (each 1 having an objectness) it's 5007 objectness numbers. We search and return the rows. View isn't necessary
+            # Parsed through all of this crazy code below and replaced it with one simple single line.
+                # non_zero_objectness =  (torch.nonzero(image_prediction[:,4]))
+                # image_positive_prediction = image_prediction[non_zero_objectness,:].view(-1,7)
+                # image_positive_prediction = image_prediction[torch.nonzero(image_prediction[:,4]).squeeze()].view(-1,7)
+
+            # Search all rows along column 4 (objectness) and only return rows that are non zero objectness (set by conf_mask)
+            image_positive_prediction = image_prediction[image_prediction[:,4] != 0]
             # MOVING FORWARD OUR MATRIX OF POSSIBLE DETECTIONS IS A FRACTION OF THE ORIGINAL TOTAL 10647 ATTEMPTS
-            image_positive_prediction = image_prediction[non_zero_objectness.squeeze(),:].view(-1,7)
         except:
             continue
 
-        
-        # Get the various classes detected in the image, this looks like it might error if there are no detections above
-        img_classes = unique(image_positive_prediction[:,-1]) # -1 index holds the class index
 
         # Time to perform the Non Max Suppresion algorithm
-        # NOTE: I need to read this entire thing in details and really understand it better
-        # Iterate through the detected classes, one class at a time
-        for cls in img_classes:
+        # First we iterate through the detected classes, one class at a time (-1 index holds the class index)
+        for cls in unique(image_positive_prediction[:,-1]):
 
             # Return boolean of positive prediction matrix detecting the iterated class, multiply to get the detections with one particular class.
             cls_mask = image_positive_prediction*(image_positive_prediction[:,-1] == cls).float().unsqueeze(1)
@@ -201,7 +222,7 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
             # Now we search our original prediction matrix for the rows with the non-zero indices and return it in a specific view
             image_pred_class = image_positive_prediction[class_mask_ind].view(-1,7)
 
-            # THIS CAN ALL BE REPLACED WITH ONE ELEGANT LINE OF CODE RIGHT HERE
+            # Return only the set of rows that correspond to the class that is being observed
             image_pred_class = image_positive_prediction[image_positive_prediction[:,-1] == cls]
 
             # sort the detections such that the entry with the maximum objectness
@@ -221,7 +242,7 @@ def write_results(prediction, confidence, num_classes, nms_conf = 0.4):
                     break
 
                 #Zero out all the detections that have IoU > treshhold
-                iou_mask = (ious < nms_conf).float().unsqueeze(1)
+                iou_mask = (ious < suppress_threshold).float().unsqueeze(1)
                 image_pred_class[i+1:] *= iou_mask
 
                 #Remove the non-zero entries

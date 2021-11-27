@@ -36,14 +36,14 @@ import torch.nn as nn
 from torch.autograd import Variable
 import numpy as np
 import cv2
-from util import *
 import argparse
-import os
-import os.path as osp
-from darknet import Darknet
 import pickle as pkl
 import pandas as pd
 import random
+import os
+import os.path as osp
+from darknet_model_functions import *
+from darknet_operational_functions import *
 
 
 
@@ -64,7 +64,7 @@ def get_input_args():
     parser.add_argument("--det", dest = 'det', help =
                         "Image / Directory to store detections to",
                         default = "det", type = str)
-    parser.add_argument("--bs", dest = "bs", help = "Batch size", default = 1)
+    parser.add_argument("--bs", dest = "bs", help = "Batch size", default = 5)
     parser.add_argument("--confidence", dest = "confidence", help = "Object Confidence to filter predictions", default = 0.5)
     parser.add_argument("--nms_thresh", dest = "nms_thresh", help = "NMS Threshhold", default = 0.4)
     parser.add_argument("--cfg", dest = 'cfgfile', help =
@@ -160,7 +160,7 @@ for i, batch in enumerate(im_batches):
 
     prediction = model(Variable(batch, volatile = True), CUDA)
 
-    prediction = write_results(prediction, confidence, num_classes, nms_conf = nms_thesh)
+    prediction = write_results(prediction, confidence, num_classes, suppress_threshold = nms_thesh)
 
     end = time.time()
 

@@ -29,21 +29,11 @@
 from __future__ import division
 import time, os, random
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-import numpy as np
-from util import *
-
-def get_test_input():
-    img = cv2.imread("dog-cycle-car.png")
-    # This image resize function is not connected to the darknet grid sizing, will error if doesn't match net height/width
-    img = cv2.resize(img, (416, 416))          #Resize to the input dimension
-    img_ =  img[:,:,::-1].transpose((2,0,1))  # BGR -> RGB | H X W C -> C X H X W
-    img_ = img_[np.newaxis,:,:,:]/255.0       #Add a channel at 0 (for batch) | Normalise
-    img_ = torch.from_numpy(img_).float()     #Convert to float
-    img_ = Variable(img_)                     # Convert to Variable
-    return img_
+from darknet_operational_functions import *
 
 
 def parse_cfg(cfgfile):
@@ -240,14 +230,14 @@ class Darknet(nn.Module):
 
                 anchors = self.module_list[i][0].anchors
                 # Get the input dimensions
-                inp_dim = int (self.net_info["height"])
+                input_dim = int(self.net_info["height"])
 
-                # Get the number of classes
-                num_classes = int (module["classes"])
+                # Get the number of classes, technically not required since this is embedded in the shape of the feature map x
+                num_classes = int(module["classes"])
 
-                #Transform
+                #Transform x feature map by sending to predict transform
                 x = x.data
-                x = predict_transform(x, inp_dim, anchors, num_classes, CUDA)
+                x = predict_transform(x, input_dim, anchors, num_classes, CUDA)
 
                 # initialize the collector cycle for concatenating detections
                 if not write:              # if no collector has been intialised.
