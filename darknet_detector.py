@@ -1,6 +1,7 @@
 #!/usr/bin/python
 # From https://github.com/ayooshkathuria/YOLO_v3_tutorial_from_scratch/blob/master/detect.py
-# Copied to run operational and model functions on individual images to check they are working
+# Read and learned from the linked github repo above to copy in the detector code and run operational and model functions
+# Took notes and wrote the code while following along with Ayoosh to see what it takes to run the detector
 
 from __future__ import division
 import time
@@ -31,23 +32,16 @@ def get_input_args():
         - Stored command line arguments as an Argument Parser Object with parse_args() data structure
     '''
     parser = argparse.ArgumentParser(description = 'YOLO Powered Detection and Classification')
-    parser.add_argument("--images", dest = 'images', help =
-                        "Image / Directory containing images to perform detection upon",
+    parser.add_argument("--images", dest = 'images', help = "Image / Directory containing images to perform detection upon",
                         default = "imgs", type = str)
-    parser.add_argument("--det", dest = 'det', help =
-                        "Image / Directory to store detections to",
+    parser.add_argument("--det", dest = 'det', help = "Image / Directory to store detections to",
                         default = "det", type = str)
     parser.add_argument("--bs", dest = "bs", help = "Batch size", default = 5)
     parser.add_argument("--confidence", dest = "confidence", help = "Object Confidence to filter predictions", default = 0.5)
     parser.add_argument("--nms_thresh", dest = "nms_thresh", help = "NMS Threshhold", default = 0.4)
-    parser.add_argument("--cfg", dest = 'cfgfile', help =
-                        "Config file",
-                        default = "cfg/yolov3.cfg", type = str)
-    parser.add_argument("--weights", dest = 'weightsfile', help =
-                        "weightsfile",
-                        default = "yolov3.weights", type = str)
-    parser.add_argument("--reso", dest = 'reso', help =
-                        "Input resolution of the network. Increase to increase accuracy. Decrease to increase speed",
+    parser.add_argument("--cfg", dest = 'cfgfile', help = "Config file", default = "cfg/yolov3.cfg", type = str)
+    parser.add_argument("--weights", dest = 'weightsfile', help = "weightsfile", default = "yolov3.weights", type = str)
+    parser.add_argument("--reso", dest = 'reso', help = "Resolution. Increase to increase accuracy. Decrease to increase speed",
                         default = "416", type = str)
 
     return parser.parse_args()

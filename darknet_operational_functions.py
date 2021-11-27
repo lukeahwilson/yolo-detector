@@ -1,30 +1,11 @@
 #!/usr/bin/python
 # PROGRAMMER: Luke Wilson
 # DATE CREATED: 2021-11-04
-# REVISED DATE: 2021-??-??
 # References:
 #   - https://blog.paperspace.com/how-to-implement-a-yolo-object-detector-in-pytorch/
-# NOTE:
-#   - Work in progress
 # PURPOSE:
-#   - API to train and apply leveraged pretrained vision models for detection
-# REQUIREMENTS:
-#   - Pretained model is downloaded and can be trained on a dataset by user
-#   - The number of attached fully connected layers is customizable by the user
-#   - The deeper convolutional layers are unfrozen for a period of time during training for tuning
-#   - User can load a model and continue training or move directly to inference
-#   - Saved trained model information is stored in a specific folder with a useful naming convention
-#   - There are time-limited prompts that allow the user to direct processes as needed
-#   - Training performance can be tested before moving onward to inference if desired
-#   - Predictions are made using paralleled batches and are saved in a results dictionary
-# HOW TO USE:
-#   - If no model has been trained and saved, start by training a model
-#   - Store data in folders at this location: os.path.expanduser('~') + '/Programming Data/'
-#   - For training, 'train' and 'valid' folders with data are required in the data_dir
-#   - For overfit testing, an 'overfit' folder with data is required in the data_dir
-#   - For performance testing, a 'test' folder with data is required in the data_dir
-#   - For inference, put data of interest in a 'predict' folder in the data_dir
-#   - For saving and loading models, create a 'models' folder in the data_dir
+#   - An exercise to build supporting operational functions to harnes a yolov3 detector class from scratch
+#   - Worked through the notes, learned and disected code, and implemented code while following along the tutorial blog
 ##
 
 # Import libraries
@@ -256,20 +237,20 @@ def bbox_iou(box1, box2):
 
 
     """
-    #Get the coordinates of bounding boxes
+    # Get the coordinates of bounding boxes
     b1_x1, b1_y1, b1_x2, b1_y2 = box1[:,0], box1[:,1], box1[:,2], box1[:,3]
     b2_x1, b2_y1, b2_x2, b2_y2 = box2[:,0], box2[:,1], box2[:,2], box2[:,3]
 
-    #get the corrdinates of the intersection rectangle
+    # Get the corrdinates of the intersection rectangle
     inter_rect_x1 =  torch.max(b1_x1, b2_x1)
     inter_rect_y1 =  torch.max(b1_y1, b2_y1)
     inter_rect_x2 =  torch.min(b1_x2, b2_x2)
     inter_rect_y2 =  torch.min(b1_y2, b2_y2)
 
-    #Intersection area
+    # Intersection area
     inter_area = torch.clamp(inter_rect_x2 - inter_rect_x1 + 1, min=0) * torch.clamp(inter_rect_y2 - inter_rect_y1 + 1, min=0)
 
-    #Union Area
+    # Union Area
     b1_area = (b1_x2 - b1_x1 + 1)*(b1_y2 - b1_y1 + 1)
     b2_area = (b2_x2 - b2_x1 + 1)*(b2_y2 - b2_y1 + 1)
 
