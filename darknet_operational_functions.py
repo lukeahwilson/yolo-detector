@@ -115,11 +115,6 @@ def predict_transform(prediction, input_dim, anchors, total_classes, CUDA = True
     # Rescaling the anchors to match the resized image. Each anchor has width and height that gets scaled by stride value
     anchors = [(a[0]/stride, a[1]/stride) for a in anchors]
 
-
-
-
-
-
     # Apply the anchors to the dimensions of the bounding box.
     anchors = torch.FloatTensor(anchors)
 
@@ -288,7 +283,6 @@ def unique(tensor):
     tensor_np = tensor.cpu().numpy()
     unique_np = np.unique(tensor_np)
     unique_tensor = torch.from_numpy(unique_np)
-
     tensor_res = tensor.new(unique_tensor.shape)
     tensor_res.copy_(unique_tensor)
     return tensor_res
@@ -308,11 +302,8 @@ def letterbox_image(img, inp_dim):
     new_w = int(img_w * min(w/img_w, h/img_h))
     new_h = int(img_h * min(w/img_w, h/img_h))
     resized_image = cv2.resize(img, (new_w,new_h), interpolation = cv2.INTER_CUBIC)
-
     canvas = np.full((inp_dim[1], inp_dim[0], 3), 128)
-
     canvas[(h-new_h)//2:(h-new_h)//2 + new_h,(w-new_w)//2:(w-new_w)//2 + new_w,  :] = resized_image
-
     return canvas
 
 
@@ -322,7 +313,6 @@ def prep_image(img, inp_dim):
 
     Returns a Variable
     """
-
     img = cv2.resize(img, (inp_dim, inp_dim))
     img = img[:,:,::-1].transpose((2,0,1)).copy()
     img = torch.from_numpy(img).float().div(255.0).unsqueeze(0)
