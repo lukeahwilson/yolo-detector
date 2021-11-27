@@ -75,7 +75,13 @@ def predict_transform(prediction, input_dim, anchors, total_classes, CUDA = True
     # We further flatten, such that the last column is only the attributes, and the middle column is grid cells x anchors
     prediction = prediction.view(batch_size, grid_size*grid_size*num_anchors, bbox_attrs)
 
+    # Sigmoid the centre x, centre y, and object confidencce per mathematical equation for anchor box transformations
+    prediction[:,:,0] = torch.sigmoid(prediction[:,:,0])
+    prediction[:,:,1] = torch.sigmoid(prediction[:,:,1])
+    prediction[:,:,4] = torch.sigmoid(prediction[:,:,4])
+
     # Create an arange from 0 to the length of one side of the constructed detection grid
+    # I believe the sigmoid on the position means we can leave the grid size as a unit vector value in increments of 1
     grid = np.arange(grid_size)
 
     # Add the grid center offsets to the center cordinates prediction. Create a meshgrid that counts from 0 up to the grid_size
@@ -106,13 +112,13 @@ def predict_transform(prediction, input_dim, anchors, total_classes, CUDA = True
     # NOTE: This matches the mathematical theory for anchor box translation sig(predx)+(anchorx)=boxx (same for y)
     prediction[:,:,:2] += x_y_offset
 
-    # Sigmoid the centre x, centre y, and object confidencce per mathematical equation for anchor box transformations
-    prediction[:,:,0] = torch.sigmoid(prediction[:,:,0])
-    prediction[:,:,1] = torch.sigmoid(prediction[:,:,1])
-    prediction[:,:,4] = torch.sigmoid(prediction[:,:,4])
-
     # Rescaling the anchors to match the resized image. Each anchor has width and height that gets scaled by stride value
     anchors = [(a[0]/stride, a[1]/stride) for a in anchors]
+
+
+
+
+
 
     # Apply the anchors to the dimensions of the bounding box.
     anchors = torch.FloatTensor(anchors)
@@ -156,9 +162,8 @@ def write_results(prediction, confidence, total_classes, suppress_threshold = 0.
     # If a bounding box has an objectness score below a threshold, set the entire row (all attributes) to zero
     # Note: Need to print this section to visually confirm operation running as predicted
     conf_mask = (prediction[:,:,4] > confidence).float().unsqueeze(2) # Shape = [#images batch, # boxes, index 4 from prediction as boolean 0 or 1]
-
-    # prediction = prediction[prediction[:,:,4] > confidence]
     prediction = prediction*conf_mask # Conducts broadcasting here, where the boolean is multiplied across the matrix to zero out any objectness below confidence
+
     # NOTE: that index 4 is holding the objectness value. the conf_mask temporarily uses the objectness against confidence to set low confidence information to zero
 
     # Boxes have 4 indexes that conform to the center x coordinate, y coordinate, and box height and width
@@ -183,84 +188,65 @@ def write_results(prediction, confidence, total_classes, suppress_threshold = 0.
         # Pick the maximum class score which starts after objectness and the 4 box numbers and goes for number of classes
         # NOTE: I wonder if there would be improved Non Max Suppression by keeping second and third class choices around
         # to compare against surrounding detections and suppress if there are collisions between a second choice and first
-        max_class_confidence, max_class_index = torch.max(image_prediction[:,5:5 + total_classes], 1)
         # Torch max returns tuple (max, max_indices) The one '1' takes max across row, preserving column dimension
-        seq = (image_prediction[:,:5], max_class_confidence.float().unsqueeze(1), max_class_index.float().unsqueeze(1))
-        # We unsqueeze the values, so that we can add them into a tuple
-        # seq contains the 10647 x 5 bounding boxes (4) + objectness (1) in first position, the 10647 x 1 classes in second position,
-        # and the 10647 x 1 class confidences in the third position. The lenth of seq is 3.
-        # print(seq[0], 'Column Boxes and Objectness')
-        # print(seq[1], 'Column class confidence')
-        # print(seq[2], 'Column chosen class')
+        max_class_confidence, max_class_index = torch.max(image_prediction[:,5:5 + total_classes], 1)
 
-        image_prediction = torch.cat(seq, 1) # This line of code concatenates the three individual tensors arranged in the tuple
-        # back into a single tensor, 10647 x 7, where [#,6] is the 7th column containing the chosen class or class index
-
+        # Concatenate sequence of 10647 x 5 bounding boxes (4) + objectness (1) in first position, the 10647 x 1 classes in second position,
+        # and the 10647 x 1 class confidences in the third position. We unsqueeze the values, so that we can make them a length 3 tuple
+        # Then we concatenate the three individual tensors arranged in the tuple back into a single tensor, 10647 x 7, with class in column 7
+        image_prediction = torch.cat((image_prediction[:,:5], max_class_confidence.unsqueeze(1), max_class_index.unsqueeze(1)), 1)
 
         # If no detections at all, then there would be an error, so we use try
         try:
-            # Parsed through all of this crazy code below and replaced it with one simple single line.
+            # Example of parsing through a bunch of crazy code below and replacing it with one simple single line.
                 # non_zero_objectness =  (torch.nonzero(image_prediction[:,4]))
                 # image_positive_prediction = image_prediction[non_zero_objectness,:].view(-1,7)
                 # image_positive_prediction = image_prediction[torch.nonzero(image_prediction[:,4]).squeeze()].view(-1,7)
 
-            # Search all rows along column 4 (objectness) and only return rows that are non zero objectness (set by conf_mask)
+            # Search all rows along column 4 (objectness) and only return rows that were not zero'd out (set by conf_mask)
             image_positive_prediction = image_prediction[image_prediction[:,4] != 0]
             # MOVING FORWARD OUR MATRIX OF POSSIBLE DETECTIONS IS A FRACTION OF THE ORIGINAL TOTAL 10647 ATTEMPTS
         except:
             continue
 
-
         # Time to perform the Non Max Suppresion algorithm
         # First we iterate through the detected classes, one class at a time (-1 index holds the class index)
-        for cls in unique(image_positive_prediction[:,-1]):
-
-            # Return boolean of positive prediction matrix detecting the iterated class, multiply to get the detections with one particular class.
-            cls_mask = image_positive_prediction*(image_positive_prediction[:,-1] == cls).float().unsqueeze(1)
-            # Now we use non.zero to return the row index of each row with a true boolean. -2 is irrelevant, any nonzero column works
-            class_mask_ind = torch.nonzero(cls_mask[:,-2]).squeeze()
-            # Now we search our original prediction matrix for the rows with the non-zero indices and return it in a specific view
-            image_pred_class = image_positive_prediction[class_mask_ind].view(-1,7)
+        for class_detection in unique(image_positive_prediction[:,-1]):
 
             # Return only the set of rows that correspond to the class that is being observed
-            image_pred_class = image_positive_prediction[image_positive_prediction[:,-1] == cls]
+            image_class_prediction = image_positive_prediction[image_positive_prediction[:,-1] == class_detection]
 
-            # sort the detections such that the entry with the maximum objectness
-            # confidence is at the top
-            conf_sort_index = torch.sort(image_pred_class[:,4], descending = True)[1]
-            image_pred_class = image_pred_class[conf_sort_index]
-            idx = image_pred_class.size(0)   #Number of detections
+            # sort the detections to put the maximum objectness confidence at the top
+            conf_sort_index = torch.sort(image_class_prediction[:,4], descending = True)[1]
+            image_class_prediction = image_class_prediction[conf_sort_index]
 
-            for i in range(idx):
-                #Get the IOUs of all boxes that come after the one we are looking at
-                #in the loop
+            # Now we iterate through the number of detections made to compare intersection of union for non max suppression
+            for detection in range(image_class_prediction.size(0)):
+                # Get the IOUs of all boxes that come after the one we are looking at
                 try:
-                    ious = bbox_iou(image_pred_class[i].unsqueeze(0), image_pred_class[i+1:])
+                    ious = bbox_iou(image_class_prediction[detection].unsqueeze(0), image_class_prediction[detection+1:])
                 except ValueError:
                     break
                 except IndexError:
                     break
 
-                #Zero out all the detections that have IoU > treshhold
+                # Zero out detections based on intersection of union compared to non max suppression threshold
                 iou_mask = (ious < suppress_threshold).float().unsqueeze(1)
-                image_pred_class[i+1:] *= iou_mask
 
-                #Remove the non-zero entries
-                non_zero_objectness = torch.nonzero(image_pred_class[:,4]).squeeze()
-                image_pred_class = image_pred_class[non_zero_objectness].view(-1,7)
+                # Broadcast zero'd out mask against the prediction matrix
+                image_class_prediction[detection+1:] *= iou_mask
 
-                # Should be able to replace above lines with the same simplified lines of code
+                # Search all rows along column 4 (objectness) and only return rows that were not zero'd out (set by conf_mask)
+                image_class_prediction = image_class_prediction[image_class_prediction[:,4] != 0]
 
             # Create a batch id to associate the detections to the batch id and repeat for all detections of every class in the image
-            batch_ind = image_pred_class.new(image_pred_class.size(0), 1).fill_(image)
-
-            seq = batch_ind, image_pred_class
+            batch_ind = image_class_prediction.new(image_class_prediction.size(0), 1).fill_(image)
 
             if not write:
-                output = torch.cat(seq,1)
+                output = torch.cat((batch_ind, image_class_prediction),1)
                 write = True
             else:
-                out = torch.cat(seq,1)
+                out = torch.cat((batch_ind, image_class_prediction),1)
                 output = torch.cat((output,out))
 
     try:

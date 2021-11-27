@@ -236,7 +236,7 @@ def write(x, results, color):
 # Here we modify the images inside loaded_ims inplace.
 
 list(map(lambda x: write(x, loaded_ims, random.choice(colors)), output))
-print(args.det)
+
 det_names = pd.Series(imlist).apply(lambda x: "{}/det_{}".format(args.det,x.split("/")[-1]))
 
 
@@ -244,9 +244,6 @@ det_names = pd.Series(imlist).apply(lambda x: "{}/det_{}".format(args.det,x.spli
 
 
 list(map(cv2.imwrite, det_names, loaded_ims))
-
-print(det_names)
-
 
 
 end = time.time()
