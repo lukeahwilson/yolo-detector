@@ -1,8 +1,8 @@
 # Yolo-Powered-Detector
-A object detecting neural network powered by the yolo architecture and leveraging the PyTorch framework and associated libraries.
+An object detecting neural network powered by the yolo architecture and leveraging the PyTorch framework and associated libraries.
 
 ## PURPOSE:
-An exercise to build a yolov3 detector class from scratch using the open source config file
+An exercise to build a yolov3 detector class from scratch using the open source config file.
 The yolo architecture is built by learning from and following along the blog by Ayoosh Kathuria and his associated github repository.
 Once mastering this tutorial I will be aiming to put this knowledge towards applying detection and deep learning towards whatever tasks interest me next.
 
